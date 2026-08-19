@@ -1,5 +1,7 @@
 package com.example.data.repository
 
+import android.util.Base64
+import android.util.Log
 import com.example.data.model.*
 import com.example.data.supabase.SessionManager
 import com.example.data.supabase.SupabaseConfig
@@ -14,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 sealed class Resource<out T> {
@@ -36,14 +39,70 @@ private fun JSONObject.optNullableString(key: String): String? {
     return if (value == "null" || value.isEmpty()) null else value
 }
 
+private fun isValidUuid(str: String?): Boolean {
+    if (str.isNullOrBlank()) return false
+    return try {
+        val trimmed = str.trim()
+        val parsed = UUID.fromString(trimmed)
+        parsed != null && trimmed.length == 36
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun extractSubFromJwt(token: String?): String? {
+    if (token.isNullOrBlank()) return null
+    try {
+        val parts = token.split(".")
+        if (parts.size >= 2) {
+            val decodedBytes = Base64.decode(
+                parts[1],
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            )
+            val payload = String(decodedBytes, Charsets.UTF_8)
+            val json = JSONObject(payload)
+            val sub = json.optString("sub")
+            if (isValidUuid(sub)) {
+                return sub
+            }
+        }
+    } catch (_: Exception) {}
+    return null
+}
+
+private fun parseSupabaseError(responseCode: Int, responseBody: String?, defaultMessage: String): String {
+    if (responseBody.isNullOrBlank()) return "$defaultMessage (HTTP $responseCode)"
+    return try {
+        val json = JSONObject(responseBody)
+        when {
+            json.has("error_description") && !json.isNull("error_description") -> json.getString("error_description")
+            json.has("msg") && !json.isNull("msg") -> json.getString("msg")
+            json.has("message") && !json.isNull("message") -> json.getString("message")
+            json.has("error") && !json.isNull("error") -> {
+                val err = json.get("error")
+                if (err is JSONObject) {
+                    err.optString("message", err.optString("msg", defaultMessage))
+                } else {
+                    err.toString()
+                }
+            }
+            json.has("hint") && !json.isNull("hint") -> "${json.optString("message", defaultMessage)} - ${json.getString("hint")}"
+            json.has("details") && !json.isNull("details") -> "${json.optString("message", defaultMessage)}: ${json.getString("details")}"
+            else -> "$defaultMessage (HTTP $responseCode)"
+        }
+    } catch (_: Exception) {
+        "$defaultMessage (HTTP $responseCode)"
+    }
+}
+
 class LinguaXRepository(
     val sessionManager: SessionManager? = null
 ) {
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .writeTimeout(12, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     private val _currentSession = MutableStateFlow<UserSession?>(sessionManager?.loadSession())
@@ -81,7 +140,7 @@ class LinguaXRepository(
 
         try {
             val jsonBody = JSONObject().apply {
-                put("email", email)
+                put("email", email.trim())
                 put("password", password)
             }
             val request = Request.Builder()
@@ -95,10 +154,27 @@ class LinguaXRepository(
 
             if (response.isSuccessful && responseString.isNotBlank()) {
                 val json = JSONObject(responseString)
-                val token = json.optString("access_token")
-                val userObj = json.getJSONObject("user")
-                val userId = userObj.getString("id")
-                val userEmail = userObj.optString("email", email)
+                val token = json.optNullableString("access_token")
+                    ?: json.optJSONObject("session")?.optNullableString("access_token")
+
+                val userObj = json.optJSONObject("user")
+                    ?: json.optJSONObject("session")?.optJSONObject("user")
+                    ?: if (json.has("id")) json else null
+
+                val directUserId = userObj?.optNullableString("id") ?: json.optNullableString("id")
+                val jwtSub = extractSubFromJwt(token)
+                val userId = when {
+                    isValidUuid(directUserId) -> directUserId!!
+                    isValidUuid(jwtSub) -> jwtSub!!
+                    else -> null
+                }
+
+                if (userId == null) {
+                    Log.e("LinguaXAuth", "Login failed: No valid user UUID found (HTTP ${response.code})")
+                    return@withContext Resource.Error("Login response did not contain a valid user ID.")
+                }
+
+                val userEmail = userObj?.optNullableString("email") ?: email.trim()
 
                 // Fetch real profile or initialize a fresh profile with 0 XP / 0 streak
                 val profile = fetchProfileFromSupabase(userId, token) ?: run {
@@ -110,7 +186,9 @@ class LinguaXRepository(
                         xp = 0,
                         coins = 0,
                         streak = 0,
-                        dailyGoal = 20
+                        dailyGoal = 15,
+                        onboardingCompleted = false,
+                        onboardingStep = 1
                     )
                     createOrUpdateProfileInSupabase(newProf, token)
                     newProf
@@ -124,17 +202,12 @@ class LinguaXRepository(
                 sessionManager?.saveSession(session)
                 Resource.Success(session)
             } else {
-                val errMsg = if (responseString.isNotBlank()) {
-                    try {
-                        val errObj = JSONObject(responseString)
-                        errObj.optString("error_description", errObj.optString("msg", "Invalid login credentials"))
-                    } catch (_: Exception) {
-                        "Login failed (${response.code})"
-                    }
-                } else "Login failed (${response.code})"
+                val errMsg = parseSupabaseError(response.code, responseString, "Invalid login credentials")
+                Log.e("LinguaXAuth", "Login failed: HTTP ${response.code}: $responseString")
                 Resource.Error(errMsg)
             }
         } catch (e: Exception) {
+            Log.e("LinguaXAuth", "Login exception: ${e.localizedMessage}", e)
             Resource.Error("Network error: ${e.localizedMessage ?: "Unable to connect"}", e)
         }
     }
@@ -149,7 +222,7 @@ class LinguaXRepository(
             val cleanUsername = email.substringBefore("@")
 
             val jsonBody = JSONObject().apply {
-                put("email", email)
+                put("email", email.trim())
                 put("password", password)
                 put("data", JSONObject().apply {
                     put("display_name", cleanDisplayName)
@@ -168,14 +241,36 @@ class LinguaXRepository(
             if (response.isSuccessful && responseString.isNotBlank()) {
                 val json = JSONObject(responseString)
                 val token = json.optNullableString("access_token")
-                val userObj = json.optJSONObject("user")
-                val userId = userObj?.optString("id") ?: ""
+                    ?: json.optJSONObject("session")?.optNullableString("access_token")
 
-                if (userId.isBlank()) {
-                    return@withContext Resource.Error("Signup was received, but no user ID was returned.")
+                val userObj = json.optJSONObject("user")
+                    ?: json.optJSONObject("session")?.optJSONObject("user")
+                    ?: if (json.has("id")) json else null
+
+                val directUserId = userObj?.optNullableString("id") ?: json.optNullableString("id")
+                val jwtSub = extractSubFromJwt(token)
+                val userId = when {
+                    isValidUuid(directUserId) -> directUserId!!
+                    isValidUuid(jwtSub) -> jwtSub!!
+                    else -> null
                 }
 
-                val userEmail = userObj.optString("email", email)
+                if (userId == null) {
+                    Log.e("LinguaXAuth", "Signup failed: No valid UUID returned (HTTP ${response.code}): $responseString")
+                    return@withContext Resource.Error("Signup was received, but no valid user ID was returned.")
+                }
+
+                val userEmail = userObj?.optNullableString("email")
+                    ?: json.optNullableString("email")
+                    ?: email.trim()
+
+                // If email confirmation is enabled on Supabase, no access_token is returned
+                if (token.isNullOrBlank()) {
+                    Log.i("LinguaXAuth", "User $userId created; email confirmation required (no access token).")
+                    return@withContext Resource.Error(
+                        "Account created successfully. Please confirm your email address and then log in."
+                    )
+                }
 
                 // Fresh user profile with 0 XP / 0 Coins / 0 Streak
                 val profile = fetchProfileFromSupabase(userId, token) ?: run {
@@ -186,7 +281,9 @@ class LinguaXRepository(
                         xp = 0,
                         coins = 0,
                         streak = 0,
-                        dailyGoal = 20
+                        dailyGoal = 15,
+                        onboardingCompleted = false,
+                        onboardingStep = 1
                     )
                     createOrUpdateProfileInSupabase(newProf, token)
                     newProf
@@ -200,15 +297,12 @@ class LinguaXRepository(
                 sessionManager?.saveSession(session)
                 Resource.Success(session)
             } else {
-                val errMsg = try {
-                    val errObj = JSONObject(responseString)
-                    errObj.optString("msg", errObj.optString("error_description", "Signup failed (${response.code})"))
-                } catch (_: Exception) {
-                    "Signup error (${response.code})"
-                }
+                val errMsg = parseSupabaseError(response.code, responseString, "Signup failed")
+                Log.e("LinguaXAuth", "Signup failed: HTTP ${response.code}: $responseString")
                 Resource.Error(errMsg)
             }
         } catch (e: Exception) {
+            Log.e("LinguaXAuth", "Signup exception: ${e.localizedMessage}", e)
             Resource.Error("Network error during signup: ${e.localizedMessage}", e)
         }
     }
@@ -229,8 +323,11 @@ class LinguaXRepository(
             }
         }
 
+        val rawId = obj.optString("id")
+        val finalId = if (isValidUuid(rawId)) rawId else fallbackUserId
+
         return Profile(
-            id = obj.optString("id", fallbackUserId),
+            id = finalId,
             username = obj.optNullableString("username"),
             displayName = obj.optString("display_name", "Learner"),
             avatarUrl = obj.optNullableString("avatar_url"),
@@ -252,25 +349,36 @@ class LinguaXRepository(
         )
     }
 
-    private fun createOrUpdateProfileInSupabase(profile: Profile, token: String?) {
-        try {
+    private fun createOrUpdateProfileInSupabase(profile: Profile, token: String?): Boolean {
+        if (!isValidUuid(profile.id)) {
+            Log.e("LinguaXProfile", "Cannot create profile: invalid UUID '${profile.id}'")
+            return false
+        }
+
+        return try {
             val reasonsArray = JSONArray()
             profile.learningReasons.forEach { reasonsArray.put(it) }
 
             val jsonBody = JSONObject().apply {
                 put("id", profile.id)
-                put("display_name", profile.displayName)
-                put("username", profile.username)
+                put("display_name", profile.displayName ?: "Learner")
+                if (!profile.username.isNullOrBlank()) {
+                    put("username", profile.username)
+                }
                 put("xp", profile.xp)
                 put("coins", profile.coins)
                 put("streak", profile.streak)
-                put("daily_goal", profile.dailyGoal)
-                profile.nativeLanguageId?.let { put("native_language_id", it) }
-                profile.learningLanguageId?.let { put("learning_language_id", it) }
+                put("daily_goal", if (profile.dailyGoal > 0) profile.dailyGoal else 15)
+                if (profile.nativeLanguageId != null && profile.nativeLanguageId > 0) {
+                    put("native_language_id", profile.nativeLanguageId)
+                }
+                if (profile.learningLanguageId != null && profile.learningLanguageId > 0) {
+                    put("learning_language_id", profile.learningLanguageId)
+                }
                 put("current_level", profile.currentLevel ?: "A1")
                 put("target_level", profile.targetLevel ?: "B1")
-                profile.ageGroup?.let { put("age_group", it) }
-                profile.gender?.let { put("gender", it) }
+                if (!profile.ageGroup.isNullOrBlank()) put("age_group", profile.ageGroup)
+                if (!profile.gender.isNullOrBlank()) put("gender", profile.gender)
                 put("learning_reasons", reasonsArray)
                 put("onboarding_completed", profile.onboardingCompleted)
                 put("onboarding_step", profile.onboardingStep)
@@ -278,17 +386,31 @@ class LinguaXRepository(
             val reqBuilder = Request.Builder()
                 .url("${SupabaseConfig.url}/rest/v1/profiles")
                 .header("apikey", SupabaseConfig.anonKey)
-                .header("Prefer", "resolution=merge-duplicates")
+                .header("Prefer", "resolution=merge-duplicates,return=representation")
                 .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
 
             if (!token.isNullOrBlank()) {
                 reqBuilder.header("Authorization", "Bearer $token")
             }
-            httpClient.newCall(reqBuilder.build()).execute()
-        } catch (_: Exception) {}
+
+            val response = httpClient.newCall(reqBuilder.build()).execute()
+            val resBody = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                Log.d("LinguaXProfile", "Profile persisted successfully for ${profile.id}")
+                true
+            } else {
+                Log.e("LinguaXProfile", "Profile persistence failed: HTTP ${response.code}: $resBody")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("LinguaXProfile", "Profile persistence exception: ${e.localizedMessage}", e)
+            false
+        }
     }
 
     private fun fetchProfileFromSupabase(userId: String, token: String?): Profile? {
+        if (!isValidUuid(userId)) return null
         return try {
             val reqBuilder = Request.Builder()
                 .url("${SupabaseConfig.url}/rest/v1/profiles?id=eq.$userId&select=*")
@@ -304,8 +426,14 @@ class LinguaXRepository(
                     val obj = array.getJSONObject(0)
                     parseProfileFromJson(obj, userId)
                 } else null
-            } else null
-        } catch (_: Exception) { null }
+            } else {
+                Log.w("LinguaXProfile", "Fetch profile status: HTTP ${response.code}: $resStr")
+                null
+            }
+        } catch (e: Exception) {
+            Log.w("LinguaXProfile", "Fetch profile exception: ${e.localizedMessage}")
+            null
+        }
     }
 
     suspend fun saveOnboarding(
@@ -318,17 +446,27 @@ class LinguaXRepository(
         learningReasons: List<String>,
         dailyGoal: Int
     ): Resource<Profile> = withContext(Dispatchers.IO) {
-        val session = _currentSession.value ?: return@withContext Resource.Error("User is not authenticated.")
+        val session = _currentSession.value ?: return@withContext Resource.Error("User is not authenticated. Please sign in.")
+
+        if (!isValidUuid(session.userId)) {
+            Log.e("LinguaXOnboarding", "Cannot save onboarding: session.userId is not a valid UUID (${session.userId})")
+            return@withContext Resource.Error("Invalid user session. Please log in again.")
+        }
+
+        if (session.accessToken.isNullOrBlank()) {
+            Log.e("LinguaXOnboarding", "Cannot save onboarding: missing access token")
+            return@withContext Resource.Error("Authentication token is missing. Please sign in again.")
+        }
 
         val updatedProfile = session.profile.copy(
-            nativeLanguageId = nativeLanguageId,
-            learningLanguageId = learningLanguageId,
+            nativeLanguageId = if (nativeLanguageId > 0) nativeLanguageId else null,
+            learningLanguageId = if (learningLanguageId > 0) learningLanguageId else null,
             currentLevel = currentLevel,
             targetLevel = targetLevel,
             ageGroup = ageGroup,
             gender = gender,
             learningReasons = learningReasons,
-            dailyGoal = dailyGoal,
+            dailyGoal = if (dailyGoal > 0) dailyGoal else 15,
             onboardingCompleted = true,
             onboardingStep = 8
         )
@@ -347,24 +485,22 @@ class LinguaXRepository(
 
             var savedProfile: Profile? = null
 
-            // 1. Try RPC call
+            // 1. Try RPC call save_user_onboarding
             try {
                 val rpcBody = JSONObject().apply {
-                    put("p_native_language_id", nativeLanguageId)
-                    put("p_learning_language_id", learningLanguageId)
+                    if (nativeLanguageId > 0) put("p_native_language_id", nativeLanguageId)
+                    if (learningLanguageId > 0) put("p_learning_language_id", learningLanguageId)
                     put("p_current_level", currentLevel)
                     put("p_target_level", targetLevel)
-                    if (ageGroup != null) put("p_age_group", ageGroup)
-                    if (gender != null) put("p_gender", gender)
+                    if (!ageGroup.isNullOrBlank()) put("p_age_group", ageGroup)
+                    if (!gender.isNullOrBlank()) put("p_gender", gender)
                     put("p_learning_reasons", reasonsJson)
-                    put("p_daily_goal", dailyGoal)
+                    put("p_daily_goal", if (dailyGoal > 0) dailyGoal else 15)
                 }
                 val rpcReq = Request.Builder()
                     .url("${SupabaseConfig.url}/rest/v1/rpc/save_user_onboarding")
                     .header("apikey", SupabaseConfig.anonKey)
-                    .apply {
-                        session.accessToken?.let { header("Authorization", "Bearer $it") }
-                    }
+                    .header("Authorization", "Bearer ${session.accessToken}")
                     .post(rpcBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
@@ -376,49 +512,60 @@ class LinguaXRepository(
                     if (profObj != null) {
                         savedProfile = parseProfileFromJson(profObj, session.userId)
                     }
+                } else {
+                    Log.w("LinguaXOnboarding", "RPC save_user_onboarding HTTP ${rpcResp.code}: $rpcStr, falling back to REST upsert")
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w("LinguaXOnboarding", "RPC save_user_onboarding exception: ${e.localizedMessage}")
+            }
 
-            // 2. Fallback to direct REST PATCH if RPC is unavailable
+            // 2. Fallback to direct authenticated REST Upsert with merge-duplicates if RPC was not used/available
             if (savedProfile == null) {
-                val patchBody = JSONObject().apply {
-                    put("native_language_id", nativeLanguageId)
-                    put("learning_language_id", learningLanguageId)
+                val upsertBody = JSONObject().apply {
+                    put("id", session.userId)
+                    if (nativeLanguageId > 0) put("native_language_id", nativeLanguageId)
+                    if (learningLanguageId > 0) put("learning_language_id", learningLanguageId)
                     put("current_level", currentLevel)
                     put("target_level", targetLevel)
-                    if (ageGroup != null) put("age_group", ageGroup)
-                    if (gender != null) put("gender", gender)
+                    if (!ageGroup.isNullOrBlank()) put("age_group", ageGroup)
+                    if (!gender.isNullOrBlank()) put("gender", gender)
                     put("learning_reasons", reasonsJson)
-                    put("daily_goal", dailyGoal)
+                    put("daily_goal", if (dailyGoal > 0) dailyGoal else 15)
                     put("onboarding_completed", true)
                     put("onboarding_step", 8)
-                }
-                val patchReq = Request.Builder()
-                    .url("${SupabaseConfig.url}/rest/v1/profiles?id=eq.${session.userId}")
-                    .header("apikey", SupabaseConfig.anonKey)
-                    .header("Prefer", "return=representation")
-                    .apply {
-                        session.accessToken?.let { header("Authorization", "Bearer $it") }
+                    put("display_name", session.profile.displayName ?: "Learner")
+                    if (!session.profile.username.isNullOrBlank()) {
+                        put("username", session.profile.username)
                     }
-                    .patch(patchBody.toString().toRequestBody("application/json".toMediaType()))
+                }
+                val restReq = Request.Builder()
+                    .url("${SupabaseConfig.url}/rest/v1/profiles")
+                    .header("apikey", SupabaseConfig.anonKey)
+                    .header("Authorization", "Bearer ${session.accessToken}")
+                    .header("Prefer", "resolution=merge-duplicates,return=representation")
+                    .post(upsertBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val patchResp = httpClient.newCall(patchReq).execute()
-                val patchStr = patchResp.body?.string() ?: ""
-                if (patchResp.isSuccessful) {
-                    if (patchStr.isNotBlank()) {
-                        val arr = JSONArray(patchStr)
-                        if (arr.length() > 0) {
-                            savedProfile = parseProfileFromJson(arr.getJSONObject(0), session.userId)
-                        }
+                val restResp = httpClient.newCall(restReq).execute()
+                val restStr = restResp.body?.string() ?: ""
+                if (restResp.isSuccessful) {
+                    if (restStr.isNotBlank()) {
+                        try {
+                            val arr = JSONArray(restStr)
+                            if (arr.length() > 0) {
+                                savedProfile = parseProfileFromJson(arr.getJSONObject(0), session.userId)
+                            }
+                        } catch (_: Exception) {}
                     }
                     if (savedProfile == null) savedProfile = updatedProfile
                 } else {
-                    return@withContext Resource.Error("Could not save your profile. Please check your connection and try again.")
+                    val errMsg = parseSupabaseError(restResp.code, restStr, "Failed to save profile")
+                    Log.e("LinguaXOnboarding", "REST onboarding save failed: HTTP ${restResp.code}: $restStr")
+                    return@withContext Resource.Error(errMsg)
                 }
             }
 
-            val finalProfile = savedProfile ?: updatedProfile
+            val finalProfile = (savedProfile ?: updatedProfile).copy(onboardingCompleted = true)
             val updatedSession = session.copy(profile = finalProfile)
             _currentSession.value = updatedSession
             sessionManager?.saveSession(updatedSession)
@@ -426,7 +573,8 @@ class LinguaXRepository(
 
             Resource.Success(finalProfile)
         } catch (e: Exception) {
-            Resource.Error("Could not save your profile. Please check your connection and try again.", e)
+            Log.e("LinguaXOnboarding", "Onboarding save exception: ${e.localizedMessage}", e)
+            Resource.Error("Network error: ${e.localizedMessage ?: "Unable to connect"}", e)
         }
     }
 

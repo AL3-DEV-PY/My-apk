@@ -167,6 +167,14 @@ class SessionManager(context: Context) {
     }
 
     fun clearSession() {
-        prefs.edit().clear().apply()
+        prefs.edit()
+            .remove(KEY_IS_LOGGED_IN)
+            .remove(KEY_USER_ID)
+            .remove(KEY_EMAIL)
+            .remove(KEY_ACCESS_TOKEN)
+            .remove(KEY_PROFILE_JSON)
+            .remove(KEY_COMPLETED_LESSONS)
+            .remove(KEY_ONBOARDING_DRAFT)
+            .apply()
     }
 }
