@@ -1,0 +1,6 @@
+{
+  "name": "LinguaX",
+  "description": "A modern, multi-language learning platform with interactive courses, vocabulary, daily challenges, and progress tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
