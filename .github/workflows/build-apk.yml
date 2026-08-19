@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -24,30 +24,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Install the exact Gradle version required by the project.
-      # This bypasses the corrupted gradle-wrapper.jar.
-      - name: Install Gradle 9.3.1
+      - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
           validate-wrappers: false
 
-      - name: Verify Gradle
+      - name: Verify installed Gradle
         run: |
           gradle --version
 
-      # Regenerate the corrupted Gradle Wrapper files.
       - name: Repair Gradle Wrapper
         run: |
           gradle wrapper --gradle-version 9.3.1
-          chmod +x gradlew
+          chmod +x ./gradlew
           ./gradlew --version
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # Configure Supabase
-      - name: Configure Supabase
+      - name: Create .env
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -59,8 +55,7 @@ jobs:
           VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           EOF
 
-      # Generate debug keystore
-      - name: Configure Debug Keystore
+      - name: Create debug keystore
         run: |
           mkdir -p ~/.android
 
@@ -79,16 +74,14 @@ jobs:
 
           cp ~/.android/debug.keystore ./debug.keystore
 
-      # Clean previous build files
-      - name: Clean Project
+      - name: Clean project
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           ./gradlew clean --no-daemon
 
-      # Build APK
-      - name: Build LinguaX APK
+      - name: Build APK
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -99,16 +92,14 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      # Check generated APK
       - name: Verify APK
         run: |
-          echo "Generated APK:"
+          echo "APK files:"
           find app/build/outputs/apk/debug \
             -type f \
             -name "*.apk" \
             -print
 
-      # Upload APK
       - name: Upload LinguaX APK
         uses: actions/upload-artifact@v4
         with:
