@@ -978,7 +978,7 @@ class LinguaXRepository(
 
     suspend fun getVocabulary(languageCode: String): Resource<List<VocabularyItem>> = withContext(Dispatchers.IO) {
         if (!SupabaseConfig.isConfigured) {
-            return@withContext Resource.Error("Database connection is not configured.")
+            return@withContext Resource.Empty
         }
 
         try {
@@ -1014,16 +1014,18 @@ class LinguaXRepository(
                 if (list.isNotEmpty()) return@withContext Resource.Success(list)
                 else return@withContext Resource.Empty
             } else {
-                return@withContext Resource.Error("Unable to fetch vocabulary (${response.code})")
+                Log.w("LinguaXRepo", "getVocabulary HTTP ${response.code}: $str")
+                return@withContext Resource.Empty
             }
         } catch (e: Exception) {
-            return@withContext Resource.Error("Error fetching vocabulary: ${e.localizedMessage}", e)
+            Log.e("LinguaXRepo", "Error fetching vocabulary: ${e.localizedMessage}")
+            return@withContext Resource.Empty
         }
     }
 
     suspend fun getDailyChallenges(): Resource<List<DailyChallenge>> = withContext(Dispatchers.IO) {
         if (!SupabaseConfig.isConfigured) {
-            return@withContext Resource.Error("Database connection is not configured.")
+            return@withContext Resource.Empty
         }
 
         try {
@@ -1072,16 +1074,18 @@ class LinguaXRepository(
                 if (list.isNotEmpty()) return@withContext Resource.Success(list)
                 else return@withContext Resource.Empty
             } else {
-                return@withContext Resource.Error("Unable to fetch challenges (${response.code})")
+                Log.w("LinguaXRepo", "getDailyChallenges HTTP ${response.code}: $str")
+                return@withContext Resource.Empty
             }
         } catch (e: Exception) {
-            return@withContext Resource.Error("Error loading challenges: ${e.localizedMessage}", e)
+            Log.e("LinguaXRepo", "Error loading challenges: ${e.localizedMessage}")
+            return@withContext Resource.Empty
         }
     }
 
     suspend fun getAchievements(): Resource<List<AchievementItem>> = withContext(Dispatchers.IO) {
         if (!SupabaseConfig.isConfigured) {
-            return@withContext Resource.Error("Database connection is not configured.")
+            return@withContext Resource.Empty
         }
 
         try {
@@ -1135,16 +1139,18 @@ class LinguaXRepository(
                 if (list.isNotEmpty()) return@withContext Resource.Success(list)
                 else return@withContext Resource.Empty
             } else {
-                return@withContext Resource.Error("Unable to fetch achievements (${response.code})")
+                Log.w("LinguaXRepo", "getAchievements HTTP ${response.code}: $str")
+                return@withContext Resource.Empty
             }
         } catch (e: Exception) {
-            return@withContext Resource.Error("Error loading achievements: ${e.localizedMessage}", e)
+            Log.e("LinguaXRepo", "Error loading achievements: ${e.localizedMessage}")
+            return@withContext Resource.Empty
         }
     }
 
     suspend fun getLeaderboard(): Resource<List<LeaderboardEntry>> = withContext(Dispatchers.IO) {
         if (!SupabaseConfig.isConfigured) {
-            return@withContext Resource.Error("Database connection is not configured.")
+            return@withContext Resource.Empty
         }
 
         val currentUserId = _currentSession.value?.userId ?: ""
@@ -1178,10 +1184,12 @@ class LinguaXRepository(
                 if (list.isNotEmpty()) return@withContext Resource.Success(list)
                 else return@withContext Resource.Empty
             } else {
-                return@withContext Resource.Error("Unable to fetch leaderboard (${response.code})")
+                Log.w("LinguaXRepo", "getLeaderboard HTTP ${response.code}: $str")
+                return@withContext Resource.Empty
             }
         } catch (e: Exception) {
-            return@withContext Resource.Error("Error loading leaderboard: ${e.localizedMessage}", e)
+            Log.e("LinguaXRepo", "Error loading leaderboard: ${e.localizedMessage}")
+            return@withContext Resource.Empty
         }
     }
 

@@ -156,6 +156,14 @@ class MainViewModel @JvmOverloads constructor(
             repository.currentSession.collect { session ->
                 if (session != null) {
                     _authState.value = AuthState.Authenticated(session)
+                    val learningId = session.profile.learningLanguageId
+                    val currentLangs = (_languagesState.value as? Resource.Success)?.data
+                    val matched = currentLangs?.find { it.id == learningId }
+                    if (matched != null && (matched.id != selectedTargetLanguage.value.id || matched.code != selectedTargetLanguage.value.code)) {
+                        repository.setSelectedLanguage(matched)
+                        loadCourses(matched.code, matched.id)
+                        loadVocabulary(matched.code)
+                    }
                 } else {
                     if (_authState.value !is AuthState.Loading && _authState.value !is AuthState.Error) {
                         _authState.value = AuthState.Unauthenticated
@@ -245,7 +253,19 @@ class MainViewModel @JvmOverloads constructor(
     fun loadLanguages() {
         viewModelScope.launch {
             _languagesState.value = Resource.Loading
-            _languagesState.value = repository.getLanguages()
+            val res = repository.getLanguages()
+            _languagesState.value = res
+            if (res is Resource.Success && res.data.isNotEmpty()) {
+                val learningId = (authState.value as? AuthState.Authenticated)?.session?.profile?.learningLanguageId
+                val matched = if (learningId != null) {
+                    res.data.find { it.id == learningId }
+                } else null
+                if (matched != null && (matched.id != selectedTargetLanguage.value.id || matched.code != selectedTargetLanguage.value.code)) {
+                    repository.setSelectedLanguage(matched)
+                    loadCourses(matched.code, matched.id)
+                    loadVocabulary(matched.code)
+                }
+            }
         }
     }
 

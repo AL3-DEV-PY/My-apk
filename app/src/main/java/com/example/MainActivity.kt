@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -50,7 +51,6 @@ enum class AuthSubScreen {
 
 enum class MainTab(val icon: ImageVector) {
     HOME(Icons.Default.Home),
-    COURSES(Icons.Default.School),
     PRACTICE(Icons.Default.Psychology),
     LEADERBOARD(Icons.Default.Leaderboard),
     PROFILE(Icons.Default.Person)
@@ -76,6 +76,7 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
 
     var authSubScreen by remember { mutableStateOf(AuthSubScreen.LANDING) }
     var currentTab by remember { mutableStateOf(MainTab.HOME) }
+    var showCoursesFromHome by remember { mutableStateOf(false) }
 
     val selectedTargetLanguage by viewModel.selectedTargetLanguage.collectAsStateWithLifecycle()
     val languagesResource by viewModel.languagesState.collectAsStateWithLifecycle()
@@ -188,10 +189,9 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
                                         .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                                 ) {
                                     MainTab.values().forEach { tab ->
-                                        val isSelected = currentTab == tab
+                                        val isSelected = currentTab == tab && !showCoursesFromHome
                                         val label = when (tab) {
                                             MainTab.HOME -> l10n.homeTab
-                                            MainTab.COURSES -> l10n.coursesTab
                                             MainTab.PRACTICE -> l10n.practiceTab
                                             MainTab.LEADERBOARD -> l10n.leaderboardTab
                                             MainTab.PROFILE -> l10n.profileTab
@@ -199,7 +199,10 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
 
                                         NavigationBarItem(
                                             selected = isSelected,
-                                            onClick = { currentTab = tab },
+                                            onClick = {
+                                                showCoursesFromHome = false
+                                                currentTab = tab
+                                            },
                                             icon = {
                                                 Icon(
                                                     imageVector = tab.icon,
@@ -231,24 +234,11 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
                                     .padding(innerPadding)
                                     .background(LinguaXBackground)
                             ) {
-                                when (currentTab) {
-                                    MainTab.HOME -> {
-                                        HomeScreen(
-                                            l10n = l10n,
-                                            profile = profile,
-                                            selectedTargetLanguage = selectedTargetLanguage,
-                                            languagesResource = languagesResource,
-                                            coursesResource = coursesResource,
-                                            challengesResource = challengesResource,
-                                            onLanguageSelected = { viewModel.setSelectedTargetLanguage(it) },
-                                            onNavigateToCourses = { currentTab = MainTab.COURSES },
-                                            onNavigateToVocabulary = { currentTab = MainTab.PRACTICE },
-                                            onNavigateToChallenges = { currentTab = MainTab.PRACTICE },
-                                            onOpenSettings = { currentTab = MainTab.PROFILE },
-                                            onOpenLesson = { lesson -> viewModel.openLesson(lesson) }
-                                        )
-                                    }
-                                    MainTab.COURSES -> {
+                                when {
+                                    showCoursesFromHome -> {
+                                        BackHandler {
+                                            showCoursesFromHome = false
+                                        }
                                         CoursesScreen(
                                             l10n = l10n,
                                             selectedTargetLanguage = selectedTargetLanguage,
@@ -257,10 +247,27 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
                                             onLanguageSelected = { viewModel.setSelectedTargetLanguage(it) },
                                             onLessonClicked = { lesson -> viewModel.openLesson(lesson) },
                                             onRetryLanguages = { viewModel.loadLanguages() },
-                                            onRetryCourses = { viewModel.loadCourses(selectedTargetLanguage.code, selectedTargetLanguage.id) }
+                                            onRetryCourses = { viewModel.loadCourses(selectedTargetLanguage.code, selectedTargetLanguage.id) },
+                                            onBack = { showCoursesFromHome = false }
                                         )
                                     }
-                                    MainTab.PRACTICE -> {
+                                    currentTab == MainTab.HOME -> {
+                                        HomeScreen(
+                                            l10n = l10n,
+                                            profile = profile,
+                                            selectedTargetLanguage = selectedTargetLanguage,
+                                            languagesResource = languagesResource,
+                                            coursesResource = coursesResource,
+                                            challengesResource = challengesResource,
+                                            onLanguageSelected = { viewModel.setSelectedTargetLanguage(it) },
+                                            onNavigateToCourses = { showCoursesFromHome = true },
+                                            onNavigateToVocabulary = { currentTab = MainTab.PRACTICE },
+                                            onNavigateToChallenges = { currentTab = MainTab.PRACTICE },
+                                            onOpenSettings = { currentTab = MainTab.PROFILE },
+                                            onOpenLesson = { lesson -> viewModel.openLesson(lesson) }
+                                        )
+                                    }
+                                    currentTab == MainTab.PRACTICE -> {
                                         PracticeScreen(
                                             l10n = l10n,
                                             profile = profile,
@@ -279,7 +286,7 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
                                             }
                                         )
                                     }
-                                    MainTab.LEADERBOARD -> {
+                                    currentTab == MainTab.LEADERBOARD -> {
                                         LeaderboardScreen(
                                             l10n = l10n,
                                             profile = profile,
@@ -288,7 +295,7 @@ fun LinguaXApp(viewModel: MainViewModel = viewModel()) {
                                             onRetry = { viewModel.loadLeaderboard() }
                                         )
                                     }
-                                    MainTab.PROFILE -> {
+                                    currentTab == MainTab.PROFILE -> {
                                         ProfileScreen(
                                             l10n = l10n,
                                             profile = profile,

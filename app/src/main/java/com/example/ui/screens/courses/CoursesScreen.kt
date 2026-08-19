@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -48,6 +49,7 @@ fun CoursesScreen(
     onLessonClicked: (Lesson) -> Unit,
     onRetryLanguages: (() -> Unit)? = null,
     onRetryCourses: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedLevelFilter by remember { mutableStateOf("ALL") }
@@ -62,7 +64,27 @@ fun CoursesScreen(
     ) {
         LinguaXHeader(
             title = l10n.coursesTab,
-            subtitle = "${selectedTargetLanguage.flagEmoji} ${selectedTargetLanguage.name} • ${l10n.allCourses}"
+            subtitle = "${selectedTargetLanguage.flagEmoji} ${selectedTargetLanguage.name} • ${l10n.allCourses}",
+            action = if (onBack != null) {
+                {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(LinguaXSurfaceElevated)
+                            .border(1.dp, LinguaXBorder, CircleShape)
+                            .testTag("courses_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = LinguaXTextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            } else null
         )
 
         // 3D Horizontal Language Switcher
