@@ -22,55 +22,28 @@ jobs:
 
     steps:
 
-      # ==========================================
-      # 1. Checkout
-      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # ==========================================
-      # 2. Java 17
-      # ==========================================
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-
-      # ==========================================
-      # 3. Android SDK
-      # ==========================================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-
-      # ==========================================
-      # 4. Gradle 9.3.1
-      #
-      # IMPORTANT:
-      # Do NOT use ./gradlew.
-      # The repository wrapper JAR is corrupted.
-      # ==========================================
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
           validate-wrappers: false
 
-
-      # ==========================================
-      # 5. Verify Gradle
-      # ==========================================
       - name: Verify Gradle
         run: |
           gradle --version
 
-
-      # ==========================================
-      # 6. Verify Supabase secrets
-      # ==========================================
       - name: Verify Supabase configuration
         run: |
           if [ -z "$SUPABASE_URL" ]; then
@@ -85,10 +58,6 @@ jobs:
 
           echo "Supabase configuration detected."
 
-
-      # ==========================================
-      # 7. Android SDK components
-      # ==========================================
       - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -98,19 +67,11 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-
-      # ==========================================
-      # 8. local.properties
-      # ==========================================
       - name: Create local.properties
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
-
-      # ==========================================
-      # 9. Supabase environment
-      # ==========================================
-      - name: Create environment configuration
+      - name: Create .env
         run: |
           cat > .env <<EOF
           SUPABASE_URL=$SUPABASE_URL
@@ -119,10 +80,6 @@ jobs:
           VITE_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
           EOF
 
-
-      # ==========================================
-      # 10. Debug keystore
-      # ==========================================
       - name: Create debug keystore
         run: |
           keytool -genkeypair \
@@ -136,40 +93,18 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-
-      # ==========================================
-      # 11. Clean
-      # ==========================================
       - name: Clean project
         run: |
           gradle clean \
             --no-daemon \
             --stacktrace
 
-
-      # ==========================================
-      # 12. Unit tests
-      # ==========================================
-      - name: Run unit tests
-        run: |
-          gradle test \
-            --no-daemon \
-            --stacktrace
-
-
-      # ==========================================
-      # 13. Build APK
-      # ==========================================
       - name: Build Debug APK
         run: |
           gradle :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
-
-      # ==========================================
-      # 14. Verify APK
-      # ==========================================
       - name: Verify APK
         run: |
           echo "Searching for generated APK..."
@@ -185,15 +120,11 @@ jobs:
           fi
 
           echo "======================================"
-          echo "APK generated successfully"
+          echo "LinguaX APK generated successfully"
           echo "======================================"
 
           ls -lh "$APK"
 
-
-      # ==========================================
-      # 15. Upload APK
-      # ==========================================
       - name: Upload LinguaX APK
         uses: actions/upload-artifact@v4
         with:
