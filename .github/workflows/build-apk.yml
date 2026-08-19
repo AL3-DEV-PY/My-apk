@@ -1,8 +1,13 @@
 ```yaml
-name: Build LinguaX APK
+name: Build LinguaX Android APK
 
 on:
   push:
+    branches:
+      - main
+      - master
+
+  pull_request:
     branches:
       - main
       - master
@@ -15,35 +20,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
+
+      # ---------------------------------------------------------
+      # 2. Java 17
+      # ---------------------------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+
+      # ---------------------------------------------------------
+      # 3. Android SDK
+      # ---------------------------------------------------------
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # ---------------------------------------------------------
+      # 4. Install Gradle 9.3.1
+      #
+      # IMPORTANT:
+      # The project's gradle-wrapper.jar is corrupted.
+      # Therefore we intentionally DO NOT use ./gradlew.
+      # ---------------------------------------------------------
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-          validate-wrappers: false
+          cache-read-only: false
 
-      - name: Verify installed Gradle
+
+      # ---------------------------------------------------------
+      # 5. Verify Gradle
+      # ---------------------------------------------------------
+      - name: Verify Gradle
         run: |
           gradle --version
 
-      - name: Repair Gradle Wrapper
-        run: |
-          gradle wrapper --gradle-version 9.3.1
-          chmod +x ./gradlew
-          ./gradlew --version
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Create .env
+      # ---------------------------------------------------------
+      # 6. Configure Supabase
+      # ---------------------------------------------------------
+      - name: Configure Supabase Environment
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -55,56 +82,110 @@ jobs:
           VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           EOF
 
-      - name: Create debug keystore
+          echo "Supabase environment configured."
+
+
+      # ---------------------------------------------------------
+      # 7. Create Android debug keystore
+      #
+      # app/build.gradle.kts expects:
+      # ${rootDir}/debug.keystore
+      # ---------------------------------------------------------
+      - name: Create Debug Keystore
         run: |
-          mkdir -p ~/.android
+          keytool -genkeypair \
+            -v \
+            -keystore debug.keystore \
+            -alias androiddebugkey \
+            -storepass android \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair \
-              -v \
-              -keystore ~/.android/debug.keystore \
-              -alias androiddebugkey \
-              -storepass android \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
+          echo "Debug keystore created."
 
-          cp ~/.android/debug.keystore ./debug.keystore
 
-      - name: Clean project
+      # ---------------------------------------------------------
+      # 8. Clean
+      # ---------------------------------------------------------
+      - name: Clean Project
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          ./gradlew clean --no-daemon
+          gradle clean --no-daemon --stacktrace
 
-      - name: Build APK
+
+      # ---------------------------------------------------------
+      # 9. Build Debug APK
+      #
+      # IMPORTANT:
+      # Use installed Gradle instead of ./gradlew
+      # ---------------------------------------------------------
+      - name: Build LinguaX Debug APK
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          ./gradlew :app:assembleDebug \
+          gradle :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
+
+      # ---------------------------------------------------------
+      # 10. Verify APK
+      # ---------------------------------------------------------
       - name: Verify APK
         run: |
-          echo "APK files:"
+          echo "Searching for generated APK..."
+
           find app/build/outputs/apk/debug \
             -type f \
             -name "*.apk" \
             -print
 
+          if ! find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | grep -q ".apk"; then
+
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK generated successfully."
+
+
+      # ---------------------------------------------------------
+      # 11. Rename APK
+      # ---------------------------------------------------------
+      - name: Prepare APK
+        run: |
+          mkdir -p release
+
+          APK=$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          cp "$APK" release/LinguaX-debug.apk
+
+          echo "Final APK:"
+          ls -lh release/LinguaX-debug.apk
+
+
+      # ---------------------------------------------------------
+      # 12. Upload APK
+      # ---------------------------------------------------------
       - name: Upload LinguaX APK
         uses: actions/upload-artifact@v4
         with:
           name: LinguaX-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: release/LinguaX-debug.apk
           if-no-files-found: error
           retention-days: 30
 ```
