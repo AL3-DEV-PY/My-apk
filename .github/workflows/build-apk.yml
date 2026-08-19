@@ -1,65 +1,70 @@
-name: Build Android APK
+name: Build LinguaX APK
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
+
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build Debug APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
           cache: gradle
 
-      # IMPORTANT: Create the .env file with Supabase credentials BEFORE running Gradle build
-      - name: Configure Environment Variables
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      - name: Create local.properties
         run: |
-          cat << 'EOF' > .env
-          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
-          VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL || secrets.SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Create Supabase configuration
+        run: |
+          mkdir -p app/src/main/java/com/example/data/supabase
+
+          cat > app/src/main/java/com/example/data/supabase/SupabaseConfig.kt <<'EOF'
+          package com.example.data.supabase
+
+          object SupabaseConfig {
+              const val SUPABASE_URL = "${{ secrets.SUPABASE_URL }}"
+              const val SUPABASE_ANON_KEY = "${{ secrets.SUPABASE_ANON_KEY }}"
+          }
           EOF
-          echo "Created .env configuration file successfully."
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Verify Gradle
+        run: ./gradlew --version
 
-      - name: Ensure Debug Keystore Exists
-        run: |
-          mkdir -p ~/.android
-          if [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > ~/.android/debug.keystore || true
-          fi
-          if [ ! -f ~/.android/debug.keystore ]; then
-            echo "Generating fallback debug keystore..."
-            keytool -genkey -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          echo "Debug keystore configured at ~/.android/debug.keystore"
+      - name: Clean project
+        run: ./gradlew clean --no-daemon
 
-      - name: Build APK with Gradle Wrapper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || secrets.SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || secrets.SUPABASE_ANON_KEY }}
+      - name: Build APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Upload Debug APK Artifact
+      - name: Verify APK exists
+        run: |
+          echo "Generated APK files:"
+          find app/build/outputs/apk -type f -name "*.apk" -print
+
+      - name: Upload LinguaX APK
         uses: actions/upload-artifact@v4
         with:
           name: LinguaX-APK
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          if-no-files-found: error
+          retention-days: 30
